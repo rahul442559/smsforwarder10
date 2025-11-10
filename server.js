@@ -1,74 +1,117 @@
-// server.js
 const express = require('express');
-const bodyParser = require('body-parser');
 const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/* ---------- Body parsers ---------- */
-// অ্যাপ যে ফরম্যাটে পাঠায় (FormBody -> x-www-form-urlencoded)
-app.use(bodyParser.urlencoded({ extended: false }));
-// ভবিষ্যতে যদি JSON আসে
-app.use(bodyParser.json());
+// ---- RAW body ক্যাপচার (কিছু হোস্টে content-type ভুল হলে) ----
+app.use((req, res, next) => {
+  let data = '';
+  req.setEncoding('utf8');
+  req.on('data', chunk => (data += chunk));
+  req.on('end', () => {
+    req.rawBody = data || '';
+    next();
+  });
+});
 
-// স্ট্যাটিক (ইচ্ছা করলে index.html সার্ভ করুন)
-app.use(express.static(__dirname));
+// ---- form-urlencoded + json + text—সবই হালকা পদ্ধতিতে ধরব ----
+app.use(express.urlencoded({ extended: false })); // message=... (অ্যাপ এটাই পাঠায়)
+app.use(express.json());                           // ভবিষ্যতে JSON লাগলে
+app.use(express.text({ type: '*/*' }));            // text/plain, octet-stream ইত্যাদি
 
-/* ---------- Helper: message বের করার ফাংশন ---------- */
+// ইন-মেমরি লগ (সিম্পল; ডেটাবেজ দরকার নেই)
+const received = []; // {ts, headers, body, raw, parsed, parts}
+
+// Android অ্যাপ যে payload দেয় তা থেকে মেসেজ বের করা
 function extractMessage(req) {
-  // ১) নরমাল কেস: req.body.message
+  // 1) নরমাল কেস: form-urlencoded -> req.body.message
   if (req.body && typeof req.body === 'object' && 'message' in req.body) {
-    return String(req.body.message || '');
+    return String(req.body.message ?? '');
   }
 
-  // ২) কিছু হোস্টে (বা ভুল header এ) পুরো বডি একটাই key হয়ে আসে
-  // যেমন: { "2025-11-10 13:17:54##+8801...##bd##0167...##Use ... code." : "" }
+  // 2) text/plain / raw body (message=... আকারে)
+  if (typeof req.rawBody === 'string' && req.rawBody.trim()) {
+    const rb = req.rawBody.trim();
+
+    // 2a) message=... কেস
+    try {
+      const usp = new URLSearchParams(rb);
+      const m = usp.get('message');
+      if (m) return String(m);
+    } catch (_) {}
+
+    // 2b) JSON কেস
+    try {
+      const obj = JSON.parse(rb);
+      if (obj && typeof obj === 'object' && 'message' in obj) {
+        return String(obj.message ?? '');
+      }
+    } catch (_) {}
+
+    // 2c) একেবারে “মেসেজই পুরো বডি”
+    return rb;
+  }
+
+  // 3) কিছু হোস্টে পুরো বডি একটাই key হয়ে আসে: { "time##from##...": "" }
   if (req.body && typeof req.body === 'object') {
     const keys = Object.keys(req.body);
     if (keys.length === 1 && !('message' in req.body)) {
-      return String(keys[0] || '');
+      return String(keys[0] ?? '');
     }
   }
 
-  // পেলাম না
   return '';
 }
 
-/* ---------- আপনার মূল রুট ---------- */
+// অ্যাপ যেটাতে POST করবে: https://<your-app>.railway.app/sms
 app.post('/sms', (req, res) => {
   const raw = extractMessage(req);
 
-  if (!raw) {
-    console.log('No message received. headers=', req.headers, ' body=', req.body);
-    // অ্যাপকে 200 দিলেও ‘successful’ না থাকলে সে “Failed: Upload” দেখাতে পারে
+  // parts: time##from##country##to##text
+  const parts = raw ? raw.split('##') : [];
+  const record = {
+    ts: new Date().toISOString(),
+    headers: req.headers,
+    body: req.body,
+    raw: req.rawBody,
+    parsed: raw,
+    parts: {
+      time: parts[0] || '',
+      from: parts[1] || '',
+      country: parts[2] || '',
+      to: parts[3] || '',
+      text: parts.slice(4).join('##') || ''
+    }
+  };
+
+  // লগে রাখি (সাইজ সীমা 200)
+  received.push(record);
+  if (received.length > 200) received.shift();
+
+  // অ্যাপ "successful" দেখলেই OK ধরে — তাই এটিই পাঠাই
+  // (না হলে আপনার অ্যাপে "Failed: Upload" দেখা যাবে)
+  if (raw) {
+    return res.status(200).send('successful');
+  } else {
+    // মেসেজ না পেলে—ডিবাগের জন্য হেডার/বডি চেক করতে পারবেন
     return res.status(200).send('received but no message');
   }
-
-  // অ্যাপ যে ফরম্যাটে পাঠায়: time##from##country##to##text
-  const parts = raw.split('##');
-  const [smsTime, from, country, to, text] = [
-    parts[0] || '',
-    parts[1] || '',
-    parts[2] || '',
-    parts[3] || '',
-    parts.slice(4).join('##') || '' // টেক্সটে যদি নিজেই '##' থাকে, নিরাপদে জোড়া লাগালাম
-  ];
-
-  console.log('---- SMS FORWARDED ----');
-  console.log('time   :', smsTime);
-  console.log('from   :', from);
-  console.log('country:', country);
-  console.log('to     :', to);
-  console.log('text   :', text);
-
-  // TODO: এখানে চাইলে DB/save/webhook এ পাঠাতে পারেন
-
-  // অ্যান্ড্রয়েড অ্যাপ OK ধরতে ‘successful’ টেক্সটই দিন
-  res.status(200).send('successful');
 });
 
-/* ---------- Root পেজ (ঐচ্ছিক) ---------- */
+// ব্রাউজারে দেখার জন্য হালকা UI + API
+app.get('/api/messages', (_req, res) => {
+  res.json(received.slice().reverse()); // নতুনটা আগে
+});
+
+app.delete('/api/messages', (_req, res) => {
+  received.length = 0;
+  res.json({ ok: true });
+});
+
+// index.html সার্ভ
+app.use(express.static(path.join(__dirname)));
+
 app.get('/', (_req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
