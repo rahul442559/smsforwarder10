@@ -1,31 +1,4 @@
-Quick Start (Bangla):
-1) Node 18+ ইন্সটল করা থাকতে হবে।
-2) টার্মিনালে এই ফোল্ডারে গিয়ে:
-   npm install
-   npm start
-3) ব্রাউজারে খুলুন:
-   http://localhost:3000
+    "socket.io": "^4.8.1" Please search socket.io on Package.json
+This Package must install for pusing the sms real-live.
 
-কীভাবে মেসেজ পাঠাবেন (টেস্ট):
-- form-urlencoded:
-  curl -X POST http://localhost:3000/sms \
-       -H "Content-Type: application/x-www-form-urlencoded" \
-       --data "message=Your OTP is 123456&to=01700111222"
-
-- JSON:
-  curl -X POST http://localhost:3000/sms \
-       -H "Content-Type: application/json" \
-       -d '{"message":"Your OTP is 654321","to":"01700111222"}'
-
-UI আচরণ:
-- রিসেন্ট মেসেজগুলো স্ক্রিনে সাথে সাথে দেখা যাবে (SSE)।
-- যেসব মেসেজে “OTP/One Time/ওটিপি/কোড” শব্দ পাওয়া যাবে সেগুলো ১ মিনিটের জন্য লাল দেখাবে।
-- নতুন মেসেজ উপরে (Newest on Top)। ১ মিনিট পরে রঙ স্বাভাবিক।
-- Delete বাটন চাপলে আইটেম মুছে যায় এবং UI তে সাথে সাথে হাইড হয়।
-
-এন্ডপয়েন্টস (Server):
-- GET  /api/messages        → সব মেসেজ (JSON)
-- POST /api/messages        → {text/message, to, time} JSON
-- POST /sms                 → form-urlencoded বা JSON (message, to)
-- DELETE /api/messages/:id  → নির্দিষ্ট মেসেজ ডিলিট
-- GET  /events              → SSE (UI auto-update)
+Glith First e Select kora lagbe
