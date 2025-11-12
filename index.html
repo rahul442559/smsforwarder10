@@ -17,6 +17,9 @@
     .btn-del:hover { background:#222a3d; }
     .empty { opacity:.7; text-align:center; padding:40px 0; }
     a { color:#bcd3ff; text-decoration:none; }
+
+    /* মোবাইল নম্বর হাইলাইট */
+    .to-number { font-weight:700; color:#ffd166; }
   </style>
 </head>
 <body>
@@ -43,7 +46,7 @@
       wrap.innerHTML = `
         <div>
           <div class="meta row"><strong>time:</strong> ${escapeHtml(rec.parts.time || '')}</div>
-          <div class="meta row"><strong>to:</strong> ${escapeHtml(rec.parts.to || '')}</div>
+          <div class="meta row"><strong>to:</strong> <span class="to-number">${escapeHtml(rec.parts.to || '')}</span></div>
           <div class="text"><strong>text:</strong> ${escapeHtml(rec.parts.text || '')}</div>
         </div>
         <div>
@@ -58,6 +61,7 @@
       return wrap;
     }
 
+    // নতুন কার্ড সবসময় তালিকার শুরুর দিকে বসানো হবে (top)
     function addTop(rec) {
       state.set(rec.id, rec);
       const el = cardTpl(rec);
@@ -65,6 +69,7 @@
       else listEl.appendChild(el);
       setEmpty();
     }
+
     function removeCard(id) {
       state.delete(id);
       const el = document.getElementById(`msg-${id}`);
@@ -77,13 +82,14 @@
       return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
     }
 
-    // Initial load fallback (in case SSE connects late)
+    // Initial load: সার্ভার যদি পুরোনো→নতুন অর্ডারে দেয়, আমরা reverse করে নতুনটাকে উপরে দেখাবো
     async function bootFetch() {
       try {
         const arr = await (await fetch('/api/messages')).json();
         listEl.innerHTML = '';
         state.clear();
-        for (const rec of arr) addTop(rec);
+        // reverse করে addTop, ফলে লেটেস্ট একেবারে উপরে
+        for (const rec of arr.slice().reverse()) addTop(rec);
       } catch (e) { console.warn('init fetch failed', e); }
     }
 
@@ -96,9 +102,10 @@
           if (payload.type === 'init') {
             listEl.innerHTML = '';
             state.clear();
-            for (const rec of payload.data) addTop(rec);
+            // init ব্যাচ আসলে reverse করে উপরে-থেকে-নীচে লেটেস্ট→ওল্ডেস্ট
+            for (const rec of payload.data.slice().reverse()) addTop(rec);
           } else if (payload.type === 'new') {
-            addTop(payload.data);
+            addTop(payload.data); // নতুন এলেই একেবারে উপরে
           } else if (payload.type === 'delete') {
             removeCard(payload.id);
           }
