@@ -4,64 +4,31 @@
   <meta charset="utf-8" />
   <title>SMS Receiver</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- প্রতি ১০ সেকেন্ডে অটো রিফ্রেশ -->
-  <meta http-equiv="refresh" content="10" />
   <style>
     :root { color-scheme: dark light; }
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background:#0f1115; color:#e6e7ea; }
     header { padding:16px 20px; font-size:22px; font-weight:700; background:#12141a; border-bottom:1px solid #22252e; }
     main { max-width: 900px; margin: 0 auto; padding: 16px; }
-    .card { background:#141823; border:1px solid #232835; border-radius:10px; padding:14px 14px 12px; margin:10px 0; display:grid; grid-template-columns: 1fr auto; gap:10px; }
+    .card { background:#141823; border:1px solid #232835; border-radius:14px; padding:14px 16px; margin:12px 0; display:grid; grid-template-columns: 1fr auto; gap:10px; }
     .meta { font-size:13px; opacity:.85; }
     .row { margin:2px 0; }
     .text { grid-column: 1 / -1; white-space: pre-wrap; word-break: break-word; font-size:15px; }
-    .btn-del { align-self:start; padding:8px 10px; border-radius:6px; border:1px solid #3a4254; background:#1b2130; color:#f3f4f6; cursor:pointer; }
-    .btn-del:hover { background:#222a3a; }
-    .pill { display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border-radius:999px; font-size:12px; border:1px solid #323748; background:#181b25; }
-    .pill span.dot { width:8px; height:8px; border-radius:999px; background:#4ade80; }
-    .controls { display:flex; gap:10px; margin-bottom:12px; align-items:center; flex-wrap:wrap; }
-    button.primary { background:#2563eb; border:none; color:#f9fafb; padding:8px 12px; border-radius:6px; cursor:pointer; font-size:14px; display:inline-flex; align-items:center; gap:6px; }
-    button.primary:hover { background:#1d4ed8; }
-    button.secondary { background:transparent; border:1px solid #374151; color:#e5e7eb; padding:8px 12px; border-radius:6px; cursor:pointer; font-size:14px; }
-    button.secondary:hover { background:#111827; }
-    .status { font-size:13px; opacity:.75; }
-    .empty-state { text-align:center; padding:40px 20px; border-radius:10px; border:1px dashed #374151; background:#111827; margin-top:16px; }
-    .empty-state h2 { margin:0 0 6px; font-size:18px; }
-    .empty-state p { margin:0; font-size:14px; opacity:.8; }
+    .btn-del { align-self:start; padding:8px 10px; border-radius:10px; border:1px solid #3a4254; background:#1b2130; color:#f3f4f6; cursor:pointer; }
+    .btn-del:hover { background:#222a3d; }
+    .empty { opacity:.7; text-align:center; padding:40px 0; }
+    a { color:#bcd3ff; text-decoration:none; }
   </style>
 </head>
 <body>
-  <header>📥 SMS Receiver</header>
+  <header>SMS Receiver</header>
   <main>
-    <section class="controls">
-      <button id="btn-refresh" class="primary" type="button">
-        🔄 Refresh now
-      </button>
-      <button id="btn-clear" class="secondary" type="button">
-        🧹 Clear all
-      </button>
-      <div class="pill" id="live-pill">
-        <span class="dot"></span>
-        <span>Live updates</span>
-      </div>
-      <div class="status" id="status-text">Connecting…</div>
-    </section>
-
-    <section id="list"></section>
-
-    <div class="empty-state" id="empty">
-      <h2>No messages yet</h2>
-      <p>Incoming SMS will appear here automatically.</p>
-    </div>
+    <div id="list" class="list"></div>
+    <div id="empty" class="empty" style="display:none">No messages yet.</div>
   </main>
 
   <script>
     const listEl = document.getElementById('list');
     const emptyEl = document.getElementById('empty');
-    const statusEl = document.getElementById('status-text');
-    const pillEl = document.getElementById('live-pill');
-    const btnRefresh = document.getElementById('btn-refresh');
-    const btnClear = document.getElementById('btn-clear');
 
     const state = new Map(); // id -> record
 
@@ -77,102 +44,59 @@
         <div>
           <div class="meta row"><strong>time:</strong> ${escapeHtml(rec.parts.time || '')}</div>
           <div class="meta row"><strong>to:</strong> ${escapeHtml(rec.parts.to || '')}</div>
-          <div class="meta row"><strong>from:</strong> ${escapeHtml(rec.parts.from || '')}</div>
-          <div class="text">${escapeHtml(rec.parts.body || '')}</div>
+          <div class="text"><strong>text:</strong> ${escapeHtml(rec.parts.text || '')}</div>
         </div>
-        <button class="btn-del" data-id="${rec.id}">Delete</button>
+        <div>
+          <button class="btn-del" data-id="${rec.id}" title="Delete this message">Delete</button>
+        </div>
       `;
-      const btn = wrap.querySelector('.btn-del');
-      btn.addEventListener('click', () => handleDelete(rec.id));
+      wrap.querySelector('.btn-del').addEventListener('click', async (e) => {
+        const id = e.currentTarget.getAttribute('data-id');
+        try { await fetch(`/api/messages/${id}`, { method: 'DELETE' }); }
+        catch (err) { console.error(err); }
+      });
       return wrap;
-    }
-
-    function escapeHtml(str) {
-      return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;');
-    }
-
-    async function handleDelete(id) {
-      if (!confirm('Delete this message?')) return;
-      try {
-        const res = await fetch('/api/sms/' + encodeURIComponent(id), {
-          method: 'DELETE',
-        });
-        if (!res.ok) throw new Error('Failed to delete');
-        removeCard(id);
-      } catch (err) {
-        alert('Could not delete: ' + err.message);
-      }
-    }
-
-    function removeCard(id) {
-      state.delete(id);
-      const el = document.getElementById('msg-' + id);
-      if (el?.parentNode) el.parentNode.removeChild(el);
-      setEmpty();
     }
 
     function addTop(rec) {
       state.set(rec.id, rec);
-      const card = cardTpl(rec);
-      listEl.insertBefore(card, listEl.firstChild);
+      const el = cardTpl(rec);
+      if (listEl.firstChild) listEl.insertBefore(el, listEl.firstChild);
+      else listEl.appendChild(el);
+      setEmpty();
+    }
+    function removeCard(id) {
+      state.delete(id);
+      const el = document.getElementById(`msg-${id}`);
+      if (el) el.remove();
       setEmpty();
     }
 
-    function syncList(arr) {
-      state.clear();
-      listEl.innerHTML = '';
-      for (const rec of arr) {
-        state.set(rec.id, rec);
-        listEl.appendChild(cardTpl(rec));
-      }
-      setEmpty();
+    // Escape helper
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
     }
 
-    async function fetchOnce() {
-      statusEl.textContent = 'Refreshing…';
+    // Initial load fallback (in case SSE connects late)
+    async function bootFetch() {
       try {
-        const res = await fetch('/api/sms');
-        if (!res.ok) throw new Error('Request failed: ' + res.status);
-        const json = await res.json();
-        syncList(json);
-        statusEl.textContent = 'Refreshed at ' + new Date().toLocaleTimeString();
-      } catch (err) {
-        statusEl.textContent = 'Error: ' + err.message;
-      }
+        const arr = await (await fetch('/api/messages')).json();
+        listEl.innerHTML = '';
+        state.clear();
+        for (const rec of arr) addTop(rec);
+      } catch (e) { console.warn('init fetch failed', e); }
     }
 
-    btnRefresh.addEventListener('click', fetchOnce);
-    btnClear.addEventListener('click', () => {
-      if (!confirm('Clear ALL messages from the server?')) return;
-      fetch('/api/sms', { method: 'DELETE' })
-        .then(res => {
-          if (!res.ok) throw new Error('Failed with ' + res.status);
-          state.clear();
-          listEl.innerHTML = '';
-          setEmpty();
-        })
-        .catch(err => alert('Could not clear: ' + err.message));
-    });
-
-    function bootFetch() {
-      fetchOnce();
-    }
-
+    // Live SSE
     function bootSSE() {
-      const es = new EventSource('/api/sms/stream');
-      pillEl.querySelector('.dot').style.background = '#4ade80';
-      statusEl.textContent = 'Live updates connected';
-
+      const es = new EventSource('/events');
       es.onmessage = (ev) => {
         try {
           const payload = JSON.parse(ev.data);
           if (payload.type === 'init') {
-            syncList(payload.data);
+            listEl.innerHTML = '';
+            state.clear();
+            for (const rec of payload.data) addTop(rec);
           } else if (payload.type === 'new') {
             addTop(payload.data);
           } else if (payload.type === 'delete') {
