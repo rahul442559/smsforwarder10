@@ -1,14 +1,13 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>SMS Receiver</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta charset="utf-8" />
+<title>SMS Receiver</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <!-- 🔄 Auto refresh every 10 seconds -->
-  <meta http-equiv="refresh" content="10" />
+<!-- 🔄 NOTE: এখানে আর কোন meta refresh নেই, যাতে পুরো পেজ রিলোড না হয় -->
 
-  <style>
+<style>
     :root { color-scheme: dark light; }
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background:#0f1115; color:#e6e7ea; }
     header { padding:16px 20px; font-size:22px; font-weight:700; background:#12141a; border-bottom:1px solid #22252e; }
@@ -21,30 +20,30 @@
     .btn-del:hover { background:#222a3d; }
     .empty { opacity:.7; text-align:center; padding:40px 0; }
     a { color:#bcd3ff; text-decoration:none; }
-  </style>
+</style>
 </head>
 <body>
-  <header>SMS Receiver</header>
-  <main>
-    <div id="list" class="list"></div>
-    <div id="empty" class="empty" style="display:none">No messages yet.</div>
-  </main>
+<header>SMS Receiver</header>
+<main>
+  <div id="list" class="list"></div>
+  <div id="empty" class="empty" style="display:none">No messages yet.</div>
+</main>
 
-  <script>
-    const listEl = document.getElementById('list');
-    const emptyEl = document.getElementById('empty');
+<script>
+const listEl = document.getElementById('list');
+const emptyEl = document.getElementById('empty');
 
-    const state = new Map(); // id -> record
+const state = new Map(); // id -> record
 
-    function setEmpty() {
-      emptyEl.style.display = state.size ? 'none' : 'block';
-    }
+function setEmpty() {
+  emptyEl.style.display = state.size ? 'none' : 'block';
+}
 
-    function cardTpl(rec) {
-      const wrap = document.createElement('div');
-      wrap.className = 'card';
-      wrap.id = `msg-${rec.id}`;
-      wrap.innerHTML = `
+function cardTpl(rec) {
+  const wrap = document.createElement('div');
+  wrap.className = 'card';
+  wrap.id = `msg-${rec.id}`;
+  wrap.innerHTML = `
         <div>
           <div class="meta row"><strong>time:</strong> ${escapeHtml(rec.parts.time || '')}</div>
           <div class="meta row"><strong>to:</strong> ${escapeHtml(rec.parts.to || '')}</div>
@@ -54,65 +53,76 @@
           <button class="btn-del" data-id="${rec.id}" title="Delete this message">Delete</button>
         </div>
       `;
-      wrap.querySelector('.btn-del').addEventListener('click', async (e) => {
-        const id = e.currentTarget.getAttribute('data-id');
-        try { await fetch(`/api/messages/${id}`, { method: 'DELETE' }); }
-        catch (err) { console.error(err); }
-      });
-      return wrap;
+  wrap.querySelector('.btn-del').addEventListener('click', async (e) => {
+    const id = e.currentTarget.getAttribute('data-id');
+    try {
+      await fetch(`/api/messages/${id}`, { method: 'DELETE' });
+    } catch (err) {
+      console.error(err);
     }
+  });
+  return wrap;
+}
 
-    function addTop(rec) {
-      state.set(rec.id, rec);
-      const el = cardTpl(rec);
-      if (listEl.firstChild) listEl.insertBefore(el, listEl.firstChild);
-      else listEl.appendChild(el);
-      setEmpty();
-    }
-    function removeCard(id) {
-      state.delete(id);
-      const el = document.getElementById(`msg-${id}`);
-      if (el) el.remove();
-      setEmpty();
-    }
+function addTop(rec) {
+  state.set(rec.id, rec);
+  const el = cardTpl(rec);
+  if (listEl.firstChild) listEl.insertBefore(el, listEl.firstChild);
+  else listEl.appendChild(el);
+  setEmpty();
+}
 
-    // Escape helper
-    function escapeHtml(s) {
-      return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-    }
+function removeCard(id) {
+  state.delete(id);
+  const el = document.getElementById(`msg-${id}`);
+  if (el) el.remove();
+  setEmpty();
+}
 
-    // Initial load fallback (in case SSE connects late)
-    async function bootFetch() {
-      try {
-        const arr = await (await fetch('/api/messages')).json();
+// Escape helper
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+// Initial load (and periodic refresh)
+async function bootFetch() {
+  try {
+    const res = await fetch('/api/messages');
+    const arr = await res.json();
+    listEl.innerHTML = '';
+    state.clear();
+    for (const rec of arr) addTop(rec);
+  } catch (e) {
+    console.warn('init/refresh fetch failed', e);
+  }
+}
+
+// Live SSE
+function bootSSE() {
+  const es = new EventSource('/events');
+  es.onmessage = (ev) => {
+    try {
+      const payload = JSON.parse(ev.data);
+      if (payload.type === 'init') {
         listEl.innerHTML = '';
         state.clear();
-        for (const rec of arr) addTop(rec);
-      } catch (e) { console.warn('init fetch failed', e); }
-    }
+        for (const rec of payload.data) addTop(rec);
+      } else if (payload.type === 'new') {
+        addTop(payload.data);
+      } else if (payload.type === 'delete') {
+        removeCard(payload.id);
+      }
+    } catch {}
+  };
+  es.onerror = () => console.warn('SSE disconnected…');
+}
 
-    // Live SSE
-    function bootSSE() {
-      const es = new EventSource('/events');
-      es.onmessage = (ev) => {
-        try {
-          const payload = JSON.parse(ev.data);
-          if (payload.type === 'init') {
-            listEl.innerHTML = '';
-            state.clear();
-            for (const rec of payload.data) addTop(rec);
-          } else if (payload.type === 'new') {
-            addTop(payload.data);
-          } else if (payload.type === 'delete') {
-            removeCard(payload.id);
-          }
-        } catch {}
-      };
-      es.onerror = () => console.warn('SSE disconnected…');
-    }
+bootFetch();
+bootSSE();
 
-    bootFetch();
-    bootSSE();
-  </script>
+/* 🔄 এখানে 10 সেকেন্ড পরপর শুধু ডাটা রিফ্রেশ হবে,
+   কিন্তু পেজ রিলোড হবে না */
+setInterval(bootFetch, 10000);
+</script>
 </body>
 </html>
