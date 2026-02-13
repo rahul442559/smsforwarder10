@@ -1,128 +1,310 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<title>SMS Receiver</title>
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-
-<!-- 🔄 NOTE: এখানে আর কোন meta refresh নেই, যাতে পুরো পেজ রিলোড না হয় -->
-
-<style>
+  <meta charset="utf-8" />
+  <title>SMS Receiver</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
     :root { color-scheme: dark light; }
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background:#0f1115; color:#e6e7ea; }
-    header { padding:16px 20px; font-size:22px; font-weight:700; background:#12141a; border-bottom:1px solid #22252e; }
-    main { max-width: 900px; margin: 0 auto; padding: 16px; }
+    header { position: sticky; top: 0; z-index: 10; padding:14px 20px 12px; background:#12141a; border-bottom:1px solid #22252e; }
+    .topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .title { font-size:22px; font-weight:800; letter-spacing:.2px; }
+    .conn { font-size:12px; opacity:.85; padding:6px 10px; border:1px solid #2a2f3a; border-radius:999px; background:#0f1115; }
+    .conn .dot { display:inline-block; width:8px; height:8px; border-radius:999px; margin-right:6px; vertical-align:middle; background:#8892a6; }
+    main { max-width: 980px; margin: 0 auto; padding: 14px 16px 18px; }
+
+    .filterbar { margin-top:10px; display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    .filterbar label { font-size:12px; opacity:.9; }
+    select, input {
+      background:#0f1115; color:#e6e7ea; border:1px solid #2a2f3a; border-radius:10px;
+      padding:10px 12px; outline:none;
+    }
+    input { min-width: 220px; }
+    .btn {
+      padding:10px 12px; border-radius:10px; border:1px solid #3a4254; background:#1b2130; color:#f3f4f6;
+      cursor:pointer; font-weight:650;
+    }
+    .btn:hover { background:#222a3d; }
+    .badge { font-size:12px; opacity:.85; padding:8px 10px; border:1px dashed #2a2f3a; border-radius:10px; }
+
     .card { background:#141823; border:1px solid #232835; border-radius:14px; padding:14px 16px; margin:12px 0; display:grid; grid-template-columns: 1fr auto; gap:10px; }
-    .meta { font-size:13px; opacity:.85; }
+    .meta { font-size:13px; opacity:.9; }
     .row { margin:2px 0; }
-    .text { grid-column: 1 / -1; white-space: pre-wrap; word-break: break-word; font-size:15px; }
+    .text { grid-column: 1 / -1; white-space: pre-wrap; word-break: break-word; font-size:15px; line-height:1.35; }
     .btn-del { align-self:start; padding:8px 10px; border-radius:10px; border:1px solid #3a4254; background:#1b2130; color:#f3f4f6; cursor:pointer; }
     .btn-del:hover { background:#222a3d; }
     .empty { opacity:.7; text-align:center; padding:40px 0; }
     a { color:#bcd3ff; text-decoration:none; }
-</style>
+
+    .num { font-weight:750; }
+  </style>
 </head>
 <body>
-<header>SMS Receiver</header>
-<main>
-  <div id="list" class="list"></div>
-  <div id="empty" class="empty" style="display:none">No messages yet.</div>
-</main>
+  <header>
+    <div class="topbar">
+      <div class="title">SMS Receiver</div>
+      <div id="conn" class="conn"><span class="dot"></span><span id="connText">Connecting…</span></div>
+    </div>
 
-<script>
-const listEl = document.getElementById('list');
-const emptyEl = document.getElementById('empty');
+    <!-- Filter (একবার Save করলে লোকালস্টোরেজে থাকবে) -->
+    <div class="filterbar">
+      <label for="filterType">Filter Type</label>
+      <select id="filterType" aria-label="Filter Type">
+        <option value="number">Number</option>
+        <option value="service">Transactional/Service (keyword)</option>
+      </select>
 
-const state = new Map(); // id -> record
+      <label for="filterValue">Value</label>
+      <input id="filterValue" placeholder="e.g. 017xxxxxxxx or bKash / NAGAD / GP-INFO" />
 
-function setEmpty() {
-  emptyEl.style.display = state.size ? 'none' : 'block';
-}
+      <button id="btnSave" class="btn" type="button">Save Filter</button>
+      <button id="btnClear" class="btn" type="button">Clear</button>
 
-function cardTpl(rec) {
-  const wrap = document.createElement('div');
-  wrap.className = 'card';
-  wrap.id = `msg-${rec.id}`;
-  wrap.innerHTML = `
-        <div>
-          <div class="meta row"><strong>time:</strong> ${escapeHtml(rec.parts.time || '')}</div>
-          <div class="meta row"><strong>to:</strong> ${escapeHtml(rec.parts.to || '')}</div>
-          <div class="text"><strong>text:</strong> ${escapeHtml(rec.parts.text || '')}</div>
-        </div>
-        <div>
-          <button class="btn-del" data-id="${rec.id}" title="Delete this message">Delete</button>
-        </div>
-      `;
-  wrap.querySelector('.btn-del').addEventListener('click', async (e) => {
-    const id = e.currentTarget.getAttribute('data-id');
-    try {
-      await fetch(`/api/messages/${id}`, { method: 'DELETE' });
-    } catch (err) {
-      console.error(err);
+      <span id="filterBadge" class="badge">Filter: (none)</span>
+    </div>
+  </header>
+
+  <main>
+    <div id="list" class="list"></div>
+    <div id="empty" class="empty" style="display:none">No messages yet.</div>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const listEl = document.getElementById('list');
+    const emptyEl = document.getElementById('empty');
+
+    const connEl = document.getElementById('conn');
+    const connTextEl = document.getElementById('connText');
+
+    const filterTypeEl = document.getElementById('filterType');
+    const filterValueEl = document.getElementById('filterValue');
+    const filterBadgeEl = document.getElementById('filterBadge');
+    const btnSave = document.getElementById('btnSave');
+    const btnClear = document.getElementById('btnClear');
+
+    const state = new Map(); // id -> record
+
+    const FILTER_KEY = 'smsReceiverFilter:v1';
+    const filter = { type: 'number', value: '' };
+
+    function setEmpty(visibleCount) {
+      emptyEl.style.display = visibleCount ? 'none' : 'block';
     }
-  });
-  return wrap;
-}
 
-function addTop(rec) {
-  state.set(rec.id, rec);
-  const el = cardTpl(rec);
-  if (listEl.firstChild) listEl.insertBefore(el, listEl.firstChild);
-  else listEl.appendChild(el);
-  setEmpty();
-}
+    function normalizeNumber(s) {
+      const raw = String(s || '').replace(/[^0-9+]/g, '');
+      return raw.replace(/^\+?88/, '');
+    }
 
-function removeCard(id) {
-  state.delete(id);
-  const el = document.getElementById(`msg-${id}`);
-  if (el) el.remove();
-  setEmpty();
-}
+    function colorForId(id) {
+      let h = 0;
+      const s = String(id || '');
+      for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+      return `hsl(${h}, 90%, 70%)`;
+    }
 
-// Escape helper
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-}
+    function numberNode(numberText, recId) {
+      const s = String(numberText || '');
+      const wrap = document.createElement('span');
+      wrap.className = 'num';
+      const col = colorForId(recId);
 
-// Initial load (and periodic refresh)
-async function bootFetch() {
-  try {
-    const res = await fetch('/api/messages');
-    const arr = await res.json();
-    listEl.innerHTML = '';
-    state.clear();
-    for (const rec of arr) addTop(rec);
-  } catch (e) {
-    console.warn('init/refresh fetch failed', e);
-  }
-}
-
-// Live SSE
-function bootSSE() {
-  const es = new EventSource('/events');
-  es.onmessage = (ev) => {
-    try {
-      const payload = JSON.parse(ev.data);
-      if (payload.type === 'init') {
-        listEl.innerHTML = '';
-        state.clear();
-        for (const rec of payload.data) addTop(rec);
-      } else if (payload.type === 'new') {
-        addTop(payload.data);
-      } else if (payload.type === 'delete') {
-        removeCard(payload.id);
+      if (s.length <= 3) {
+        wrap.textContent = s;
+        wrap.style.color = col;
+        return wrap;
       }
-    } catch {}
-  };
-  es.onerror = () => console.warn('SSE disconnected…');
-}
 
-bootFetch();
-bootSSE();
+      const head = document.createElement('span');
+      head.textContent = s.slice(0, -3);
 
-/* 🔄 এখানে 10 সেকেন্ড পরপর শুধু ডাটা রিফ্রেশ হবে,
-   কিন্তু পেজ রিলোড হবে না */
-setInterval(bootFetch, 10000);
-</script>
+      const tail = document.createElement('span');
+      tail.textContent = s.slice(-3);
+      tail.style.color = col;
+      tail.style.fontWeight = '900';
+
+      wrap.appendChild(head);
+      wrap.appendChild(tail);
+      return wrap;
+    }
+
+    function strong(text) {
+      const el = document.createElement('strong');
+      el.textContent = text;
+      return el;
+    }
+
+    function cardTpl(rec) {
+      const wrap = document.createElement('div');
+      wrap.className = 'card';
+      wrap.id = `msg-${rec.id}`;
+
+      const left = document.createElement('div');
+
+      const timeRow = document.createElement('div');
+      timeRow.className = 'meta row';
+      timeRow.appendChild(strong('time:'));
+      timeRow.appendChild(document.createTextNode(' ' + (rec.parts?.time || '')));
+
+      const fromRow = document.createElement('div');
+      fromRow.className = 'meta row';
+      fromRow.appendChild(strong('from:'));
+      fromRow.appendChild(document.createTextNode(' '));
+      fromRow.appendChild(numberNode(rec.parts?.from || rec.parts?.to || '', rec.id));
+
+      const textRow = document.createElement('div');
+      textRow.className = 'text';
+      textRow.appendChild(strong('text: '));
+      textRow.appendChild(document.createTextNode(rec.parts?.text || ''));
+
+      left.appendChild(timeRow);
+      left.appendChild(fromRow);
+      left.appendChild(textRow);
+
+      const right = document.createElement('div');
+      const btn = document.createElement('button');
+      btn.className = 'btn-del';
+      btn.textContent = 'Delete';
+      btn.title = 'Delete this message';
+      btn.addEventListener('click', async () => {
+        try { await fetch(`/api/messages/${encodeURIComponent(rec.id)}`, { method: 'DELETE' }); }
+        catch (err) { console.error(err); }
+      });
+      right.appendChild(btn);
+
+      wrap.appendChild(left);
+      wrap.appendChild(right);
+      return wrap;
+    }
+
+    function passesFilter(rec) {
+      const v = (filter.value || '').trim();
+      if (!v) return true;
+
+      if (filter.type === 'number') {
+        const want = normalizeNumber(v);
+        const got = normalizeNumber(rec.parts?.from || rec.parts?.to || '');
+        if (!want || !got) return false;
+        return got.endsWith(want);
+      }
+
+      const q = v.toLowerCase();
+      const from = String(rec.parts?.from || '').toLowerCase();
+      const text = String(rec.parts?.text || '').toLowerCase();
+      return from.includes(q) || text.includes(q);
+    }
+
+    function renderList() {
+      const all = Array.from(state.values());
+      all.sort((a, b) => (Number(b.ts || 0) - Number(a.ts || 0)));
+
+      listEl.innerHTML = '';
+      let shown = 0;
+
+      for (const rec of all) {
+        if (!passesFilter(rec)) continue;
+        listEl.appendChild(cardTpl(rec));
+        shown++;
+      }
+
+      setEmpty(shown);
+
+      if (filter.value) {
+        const label = (filter.type === 'number') ? 'Number' : 'Service';
+        filterBadgeEl.textContent = `Filter: ${label} = "${filter.value}"`;
+      } else {
+        filterBadgeEl.textContent = 'Filter: (none)';
+      }
+    }
+
+    function loadFilter() {
+      try {
+        const raw = localStorage.getItem(FILTER_KEY);
+        if (!raw) return;
+        const obj = JSON.parse(raw);
+        if (obj && typeof obj === 'object') {
+          filter.type = (obj.type === 'service') ? 'service' : 'number';
+          filter.value = String(obj.value || '');
+        }
+      } catch {}
+    }
+
+    function syncFilterUI() {
+      filterTypeEl.value = filter.type;
+      filterValueEl.value = filter.value;
+    }
+
+    function saveFilter() {
+      filter.type = filterTypeEl.value;
+      filter.value = filterValueEl.value.trim();
+      localStorage.setItem(FILTER_KEY, JSON.stringify({ type: filter.type, value: filter.value }));
+      renderList();
+    }
+
+    function clearFilter() {
+      filter.type = 'number';
+      filter.value = '';
+      localStorage.removeItem(FILTER_KEY);
+      syncFilterUI();
+      renderList();
+    }
+
+    btnSave.addEventListener('click', saveFilter);
+    btnClear.addEventListener('click', clearFilter);
+
+    loadFilter();
+    syncFilterUI();
+
+    async function bootFetch() {
+      try {
+        const arr = await (await fetch('/api/messages')).json();
+        state.clear();
+        for (const rec of arr) state.set(rec.id, rec);
+        renderList();
+      } catch (e) {
+        console.warn('init fetch failed', e);
+      }
+    }
+
+    function bootSocket() {
+      const socket = io();
+
+      socket.on('connect', () => {
+        connEl.querySelector('.dot').style.background = '#34d399';
+        connTextEl.textContent = 'Connected';
+      });
+
+      socket.on('disconnect', () => {
+        connEl.querySelector('.dot').style.background = '#fbbf24';
+        connTextEl.textContent = 'Disconnected';
+      });
+
+      socket.on('sms:init', (arr) => {
+        if (!Array.isArray(arr)) return;
+        state.clear();
+        for (const rec of arr) state.set(rec.id, rec);
+        renderList();
+      });
+
+      socket.on('sms:new', (rec) => {
+        if (!rec || !rec.id) return;
+        state.set(rec.id, rec);
+        renderList(); // latest always on top
+      });
+
+      socket.on('sms:delete', (payload) => {
+        const id = payload && payload.id;
+        if (!id) return;
+        state.delete(id);
+        renderList();
+      });
+    }
+
+    bootFetch();
+    bootSocket();
+    renderList();
+  </script>
 </body>
 </html>
