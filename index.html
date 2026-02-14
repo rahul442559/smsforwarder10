@@ -18,9 +18,8 @@
     .empty { opacity:.7; text-align:center; padding:40px 0; }
     a { color:#bcd3ff; text-decoration:none; }
 
-    /* মোবাইল নম্বর হাইলাইট (শেষ ৩ ডিজিট রঙিন হবে) */
-    .to-number { font-weight:700; color: inherit; }
-    .to-suffix { font-weight:800; }
+    /* মোবাইল নম্বর হাইলাইট (color এখন JS থেকে আসবে) */
+    .to-number { font-weight:700; }
   </style>
 </head>
 <body>
@@ -45,90 +44,38 @@
       return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
     }
 
-    // ---------- ✅ Color + phone highlight helpers ----------
-    function hash32(str) {
-      // FNV-1a 32-bit
-      let h = 2166136261;
+    // ===== Stable color for same number/operator (deterministic) =====
+    function hashString(str) {
+      let h = 2166136261; // FNV-1a base
       for (let i = 0; i < str.length; i++) {
         h ^= str.charCodeAt(i);
         h = Math.imul(h, 16777619);
       }
-      return h >>> 0;
+      return h >>> 0; // unsigned
     }
 
-    function colorFromSeed(seed) {
-      const h = hash32(seed);
-      const hue = h % 360;
-      const sat = 70 + ((h >>> 8) % 25);    // 70-94
-      const light = 55 + ((h >>> 16) % 15); // 55-69
-      return `hsl(${hue}, ${sat}%, ${light}%)`;
+    function stableColorFromString(str) {
+      const s = String(str || '').trim();
+      const base = s || 'unknown';
+      const h = hashString(base) % 360;
+      const sat = 85;
+      const light = 65;
+      return `hsl(${h} ${sat}% ${light}%)`;
     }
-
-    function ensureUi(rec) {
-      if (!rec) return;
-      if (!rec.ui) rec.ui = {};
-      if (!rec.ui.toColor) {
-        const seed =
-          String(rec.id ?? '') + '|' +
-          String(rec?.parts?.to ?? '') + '|' +
-          String(rec?.parts?.time ?? '');
-        // seed না থাকলে fallback
-        rec.ui.toColor = colorFromSeed(seed || String(Math.random()));
-      }
-    }
-
-    function highlightLast3DigitsHtml(input, color) {
-      const str = String(input ?? '');
-
-      // শেষ ৩টা digit কোন কোন index এ আছে সেটা mark করি
-      const mark = new Array(str.length).fill(false);
-      let need = 3;
-      for (let i = str.length - 1; i >= 0 && need > 0; i--) {
-        if (/\d/.test(str[i])) {
-          mark[i] = true;
-          need--;
-        }
-      }
-
-      // ৩টা digit না থাকলে—যেমন আছে তেমনই দেখাই
-      if (need > 0) return escapeHtml(str);
-
-      // marked অংশগুলো span দিয়ে wrap (safe escaping সহ)
-      let out = '';
-      let i = 0;
-      while (i < str.length) {
-        if (!mark[i]) {
-          let j = i;
-          while (j < str.length && !mark[j]) j++;
-          out += escapeHtml(str.slice(i, j));
-          i = j;
-        } else {
-          let j = i;
-          while (j < str.length && mark[j]) j++;
-          out += `<span class="to-suffix" style="color:${color}">${escapeHtml(str.slice(i, j))}</span>`;
-          i = j;
-        }
-      }
-      return out;
-    }
-
-    function toNumberHtml(rec) {
-      ensureUi(rec);
-      const to = rec?.parts?.to ?? '';
-      return highlightLast3DigitsHtml(to, rec.ui.toColor);
-    }
-    // ------------------------------------------------------
+    // ===============================================================
 
     function cardTpl(rec) {
-      ensureUi(rec);
-
       const wrap = document.createElement('div');
       wrap.className = 'card';
       wrap.id = `msg-${rec.id}`;
+
+      const toVal = rec.parts.to || '';
+      const toColor = stableColorFromString(toVal);
+
       wrap.innerHTML = `
         <div>
           <div class="meta row"><strong>time:</strong> ${escapeHtml(rec.parts.time || '')}</div>
-          <div class="meta row"><strong>to:</strong> <span class="to-number">${toNumberHtml(rec)}</span></div>
+          <div class="meta row"><strong>to:</strong> <span class="to-number" style="color:${toColor}">${escapeHtml(toVal)}</span></div>
           <div class="text"><strong>text:</strong> ${escapeHtml(rec.parts.text || '')}</div>
         </div>
         <div>
@@ -143,19 +90,12 @@
       return wrap;
     }
 
-    // ✅ নতুন কার্ড সবসময় তালিকার শুরুর দিকে বসানো হবে (top)
-    // + যদি একই id আবার আসে, আগেরটা সরিয়ে একেবারে উপরে বসবে (order যেন কখনো নষ্ট না হয়)
+    // নতুন কার্ড সবসময় তালিকার শুরুর দিকে বসানো হবে (top)
     function addTop(rec) {
-      ensureUi(rec);
       state.set(rec.id, rec);
-
-      const existing = document.getElementById(`msg-${rec.id}`);
-      if (existing) existing.remove();
-
       const el = cardTpl(rec);
       if (listEl.firstChild) listEl.insertBefore(el, listEl.firstChild);
       else listEl.appendChild(el);
-
       setEmpty();
     }
 
@@ -166,50 +106,14 @@
       setEmpty();
     }
 
-    // ✅ batch render: লেটেস্ট সবসময় উপরে (time/id দেখে sort)
-    function recSortKey(rec) {
-      const t = rec?.parts?.time ?? rec?.time ?? rec?.timestamp ?? '';
-      const ms = Date.parse(t);
-      if (Number.isFinite(ms)) return ms;
-
-      // fallback: numeric time string
-      const n = Number(t);
-      if (Number.isFinite(n)) return n;
-
-      // fallback: numeric id
-      const idn = Number(rec?.id);
-      if (Number.isFinite(idn)) return idn;
-
-      return 0;
-    }
-
-    function renderBatchLatestFirst(arr) {
-      listEl.innerHTML = '';
-      state.clear();
-
-      const sorted = (arr || []).slice().sort((a, b) => {
-        const kb = recSortKey(b);
-        const ka = recSortKey(a);
-        if (kb !== ka) return kb - ka;  // latest first
-        // tie-breaker: id desc (best-effort)
-        const ib = String(b?.id ?? '');
-        const ia = String(a?.id ?? '');
-        return ib.localeCompare(ia);
-      });
-
-      for (const rec of sorted) {
-        ensureUi(rec);
-        state.set(rec.id, rec);
-        listEl.appendChild(cardTpl(rec)); // already latest->oldest
-      }
-      setEmpty();
-    }
-
-    // Initial load
+    // Initial load: সার্ভার যদি পুরোনো→নতুন অর্ডারে দেয়, আমরা reverse করে নতুনটাকে উপরে দেখাবো
     async function bootFetch() {
       try {
         const arr = await (await fetch('/api/messages')).json();
-        renderBatchLatestFirst(arr);
+        listEl.innerHTML = '';
+        state.clear();
+        // reverse করে addTop, ফলে লেটেস্ট একেবারে উপরে
+        for (const rec of arr.slice().reverse()) addTop(rec);
       } catch (e) { console.warn('init fetch failed', e); }
     }
 
@@ -220,7 +124,10 @@
         try {
           const payload = JSON.parse(ev.data);
           if (payload.type === 'init') {
-            renderBatchLatestFirst(payload.data);
+            listEl.innerHTML = '';
+            state.clear();
+            // init ব্যাচ আসলে reverse করে উপরে-থেকে-নীচে লেটেস্ট→ওল্ডেস্ট
+            for (const rec of payload.data.slice().reverse()) addTop(rec);
           } else if (payload.type === 'new') {
             addTop(payload.data); // নতুন এলেই একেবারে উপরে
           } else if (payload.type === 'delete') {
