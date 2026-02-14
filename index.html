@@ -18,9 +18,9 @@
     .empty { opacity:.7; text-align:center; padding:40px 0; }
     a { color:#bcd3ff; text-decoration:none; }
 
-    /* মোবাইল নম্বর হাইলাইট (লাস্ট ৩ ডিজিট র‍্যান্ডম কালার হবে inline style দিয়ে) */
-    .to-number { font-weight:700; }
-    .to-last3 { font-weight:800; padding:0 2px; border-radius:6px; }
+    /* মোবাইল নম্বর হাইলাইট (শেষ ৩ ডিজিট রঙিন হবে) */
+    .to-number { font-weight:700; color: inherit; }
+    .to-suffix { font-weight:800; }
   </style>
 </head>
 <body>
@@ -36,46 +36,99 @@
 
     const state = new Map(); // id -> record
 
-    // ✅ প্রতিটি SMS এর জন্য আলাদা কালার—একবার জেনারেট হলে একই SMS এ একই থাকবে
-    const colorById = new Map(); // id -> color
-
     function setEmpty() {
       emptyEl.style.display = state.size ? 'none' : 'block';
     }
 
-    function getRandomNiceColor() {
-      // HSL: চোখে সুন্দর/উজ্জ্বল দেখাবে, ডার্ক ব্যাকগ্রাউন্ডে ভালো কনট্রাস্ট
-      const h = Math.floor(Math.random() * 360);
-      const s = 85;   // saturation
-      const l = 60;   // lightness
-      return `hsl(${h} ${s}% ${l}%)`;
+    // Escape helper
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
     }
 
-    function colorForMessage(id) {
-      if (!colorById.has(id)) colorById.set(id, getRandomNiceColor());
-      return colorById.get(id);
-    }
-
-    function formatToNumber(to, id) {
-      const s = String(to ?? '');
-      if (s.length <= 3) {
-        const c = colorForMessage(id);
-        return `<span class="to-last3" style="color:${c}">${escapeHtml(s)}</span>`;
+    // ---------- ✅ Color + phone highlight helpers ----------
+    function hash32(str) {
+      // FNV-1a 32-bit
+      let h = 2166136261;
+      for (let i = 0; i < str.length; i++) {
+        h ^= str.charCodeAt(i);
+        h = Math.imul(h, 16777619);
       }
-      const head = s.slice(0, -3);
-      const tail = s.slice(-3);
-      const c = colorForMessage(id);
-      return `${escapeHtml(head)}<span class="to-last3" style="color:${c}">${escapeHtml(tail)}</span>`;
+      return h >>> 0;
     }
+
+    function colorFromSeed(seed) {
+      const h = hash32(seed);
+      const hue = h % 360;
+      const sat = 70 + ((h >>> 8) % 25);    // 70-94
+      const light = 55 + ((h >>> 16) % 15); // 55-69
+      return `hsl(${hue}, ${sat}%, ${light}%)`;
+    }
+
+    function ensureUi(rec) {
+      if (!rec) return;
+      if (!rec.ui) rec.ui = {};
+      if (!rec.ui.toColor) {
+        const seed =
+          String(rec.id ?? '') + '|' +
+          String(rec?.parts?.to ?? '') + '|' +
+          String(rec?.parts?.time ?? '');
+        // seed না থাকলে fallback
+        rec.ui.toColor = colorFromSeed(seed || String(Math.random()));
+      }
+    }
+
+    function highlightLast3DigitsHtml(input, color) {
+      const str = String(input ?? '');
+
+      // শেষ ৩টা digit কোন কোন index এ আছে সেটা mark করি
+      const mark = new Array(str.length).fill(false);
+      let need = 3;
+      for (let i = str.length - 1; i >= 0 && need > 0; i--) {
+        if (/\d/.test(str[i])) {
+          mark[i] = true;
+          need--;
+        }
+      }
+
+      // ৩টা digit না থাকলে—যেমন আছে তেমনই দেখাই
+      if (need > 0) return escapeHtml(str);
+
+      // marked অংশগুলো span দিয়ে wrap (safe escaping সহ)
+      let out = '';
+      let i = 0;
+      while (i < str.length) {
+        if (!mark[i]) {
+          let j = i;
+          while (j < str.length && !mark[j]) j++;
+          out += escapeHtml(str.slice(i, j));
+          i = j;
+        } else {
+          let j = i;
+          while (j < str.length && mark[j]) j++;
+          out += `<span class="to-suffix" style="color:${color}">${escapeHtml(str.slice(i, j))}</span>`;
+          i = j;
+        }
+      }
+      return out;
+    }
+
+    function toNumberHtml(rec) {
+      ensureUi(rec);
+      const to = rec?.parts?.to ?? '';
+      return highlightLast3DigitsHtml(to, rec.ui.toColor);
+    }
+    // ------------------------------------------------------
 
     function cardTpl(rec) {
+      ensureUi(rec);
+
       const wrap = document.createElement('div');
       wrap.className = 'card';
       wrap.id = `msg-${rec.id}`;
       wrap.innerHTML = `
         <div>
           <div class="meta row"><strong>time:</strong> ${escapeHtml(rec.parts.time || '')}</div>
-          <div class="meta row"><strong>to:</strong> <span class="to-number">${formatToNumber(rec.parts.to || '', rec.id)}</span></div>
+          <div class="meta row"><strong>to:</strong> <span class="to-number">${toNumberHtml(rec)}</span></div>
           <div class="text"><strong>text:</strong> ${escapeHtml(rec.parts.text || '')}</div>
         </div>
         <div>
@@ -90,50 +143,84 @@
       return wrap;
     }
 
-    // ✅ নতুন কার্ড সবসময় তালিকার শুরুর দিকে বসানো হবে (top) — অপরিবর্তিত
+    // ✅ নতুন কার্ড সবসময় তালিকার শুরুর দিকে বসানো হবে (top)
+    // + যদি একই id আবার আসে, আগেরটা সরিয়ে একেবারে উপরে বসবে (order যেন কখনো নষ্ট না হয়)
     function addTop(rec) {
+      ensureUi(rec);
       state.set(rec.id, rec);
+
+      const existing = document.getElementById(`msg-${rec.id}`);
+      if (existing) existing.remove();
+
       const el = cardTpl(rec);
       if (listEl.firstChild) listEl.insertBefore(el, listEl.firstChild);
       else listEl.appendChild(el);
+
       setEmpty();
     }
 
     function removeCard(id) {
       state.delete(id);
-      colorById.delete(id); // ✅ ডিলিট হলে কালার ম্যাপ থেকেও সরিয়ে দিচ্ছি
       const el = document.getElementById(`msg-${id}`);
       if (el) el.remove();
       setEmpty();
     }
 
-    // Escape helper
-    function escapeHtml(s) {
-      return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    // ✅ batch render: লেটেস্ট সবসময় উপরে (time/id দেখে sort)
+    function recSortKey(rec) {
+      const t = rec?.parts?.time ?? rec?.time ?? rec?.timestamp ?? '';
+      const ms = Date.parse(t);
+      if (Number.isFinite(ms)) return ms;
+
+      // fallback: numeric time string
+      const n = Number(t);
+      if (Number.isFinite(n)) return n;
+
+      // fallback: numeric id
+      const idn = Number(rec?.id);
+      if (Number.isFinite(idn)) return idn;
+
+      return 0;
     }
 
-    // Initial load: সার্ভার যদি পুরোনো→নতুন অর্ডারে দেয়, আমরা reverse করে নতুনটাকে উপরে দেখাবো — অপরিবর্তিত
+    function renderBatchLatestFirst(arr) {
+      listEl.innerHTML = '';
+      state.clear();
+
+      const sorted = (arr || []).slice().sort((a, b) => {
+        const kb = recSortKey(b);
+        const ka = recSortKey(a);
+        if (kb !== ka) return kb - ka;  // latest first
+        // tie-breaker: id desc (best-effort)
+        const ib = String(b?.id ?? '');
+        const ia = String(a?.id ?? '');
+        return ib.localeCompare(ia);
+      });
+
+      for (const rec of sorted) {
+        ensureUi(rec);
+        state.set(rec.id, rec);
+        listEl.appendChild(cardTpl(rec)); // already latest->oldest
+      }
+      setEmpty();
+    }
+
+    // Initial load
     async function bootFetch() {
       try {
         const arr = await (await fetch('/api/messages')).json();
-        listEl.innerHTML = '';
-        state.clear();
-        colorById.clear(); // ✅ রিফ্রেশে কালার রিসেট
-        for (const rec of arr.slice().reverse()) addTop(rec);
+        renderBatchLatestFirst(arr);
       } catch (e) { console.warn('init fetch failed', e); }
     }
 
-    // Live SSE — অপরিবর্তিত (শুধু addTop-এ আমাদের নতুন রঙ/ফরম্যাট অটো কাজ করবে)
+    // Live SSE
     function bootSSE() {
       const es = new EventSource('/events');
       es.onmessage = (ev) => {
         try {
           const payload = JSON.parse(ev.data);
           if (payload.type === 'init') {
-            listEl.innerHTML = '';
-            state.clear();
-            colorById.clear(); // ✅ init এও রিসেট
-            for (const rec of payload.data.slice().reverse()) addTop(rec);
+            renderBatchLatestFirst(payload.data);
           } else if (payload.type === 'new') {
             addTop(payload.data); // নতুন এলেই একেবারে উপরে
           } else if (payload.type === 'delete') {
