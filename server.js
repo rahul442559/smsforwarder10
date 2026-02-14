@@ -14,20 +14,6 @@ app.use(bodyParser.json());
 let latest = null;           // { message, timestamp, expiresAt }
 let autoClearTimer = null;   // setTimeout হ্যান্ডেল
 
-// API endpoint for bootFetch
-app.get('/api/messages', (req, res) => {
-  if (latest) {
-    res.json([{
-      id: 1,
-      message: latest.message,
-      timestamp: latest.timestamp,
-      to: 'Unknown'
-    }]);
-  } else {
-    res.json([]);
-  }
-});
-
 // SMS রিসিভ (JSON বা x-www-form-urlencoded—দুইভাবেই কাজ করবে)
 app.post('/sms', (req, res) => {
   const message = req.body.key || 'No message received';
