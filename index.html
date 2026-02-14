@@ -16,9 +16,6 @@
     .btn-del { align-self:start; padding:8px 10px; border-radius:10px; border:1px solid #3a4254; background:#1b2130; color:#f3f4f6; cursor:pointer; }
     .btn-del:hover { background:#222a3d; }
     .empty { opacity:.7; text-align:center; padding:40px 0; }
-    a { color:#bcd3ff; text-decoration:none; }
-
-    /* মোবাইল নম্বর হাইলাইট (color এখন JS থেকে আসবে) */
     .to-number { font-weight:700; }
   </style>
 </head>
@@ -29,117 +26,90 @@
     <div id="empty" class="empty" style="display:none">No messages yet.</div>
   </main>
 
+  <!-- Socket.IO client served by your Node server -->
+  <script src="/socket.io/socket.io.js"></script>
+
   <script>
     const listEl = document.getElementById('list');
     const emptyEl = document.getElementById('empty');
-
-    const state = new Map(); // id -> record
-
-    function setEmpty() {
-      emptyEl.style.display = state.size ? 'none' : 'block';
-    }
 
     // Escape helper
     function escapeHtml(s) {
       return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
     }
 
-    // ===== Stable color for same number/operator (deterministic) =====
+    // ===== Stable color for same number/operator =====
     function hashString(str) {
       let h = 2166136261; // FNV-1a base
       for (let i = 0; i < str.length; i++) {
         h ^= str.charCodeAt(i);
         h = Math.imul(h, 16777619);
       }
-      return h >>> 0; // unsigned
+      return h >>> 0;
     }
-
     function stableColorFromString(str) {
       const s = String(str || '').trim();
       const base = s || 'unknown';
-      const h = hashString(base) % 360;
-      const sat = 85;
-      const light = 65;
-      return `hsl(${h} ${sat}% ${light}%)`;
+      const hue = hashString(base) % 360;
+      return `hsl(${hue} 85% 65%)`;
     }
-    // ===============================================================
+    // ===============================================
 
-    function cardTpl(rec) {
-      const wrap = document.createElement('div');
-      wrap.className = 'card';
-      wrap.id = `msg-${rec.id}`;
+    function setEmpty(hasMsg) {
+      emptyEl.style.display = hasMsg ? 'none' : 'block';
+    }
 
-      const toVal = rec.parts.to || '';
+    function renderLatest(latest) {
+      // লেটেস্ট সবসময় উপরে—এখানে যেহেতু "সর্বশেষ SMS" দেখাচ্ছি, তাই একটাই কার্ড রাখছি
+      const toVal = latest.to || '';
       const toColor = stableColorFromString(toVal);
 
-      wrap.innerHTML = `
-        <div>
-          <div class="meta row"><strong>time:</strong> ${escapeHtml(rec.parts.time || '')}</div>
-          <div class="meta row"><strong>to:</strong> <span class="to-number" style="color:${toColor}">${escapeHtml(toVal)}</span></div>
-          <div class="text"><strong>text:</strong> ${escapeHtml(rec.parts.text || '')}</div>
-        </div>
-        <div>
-          <button class="btn-del" data-id="${rec.id}" title="Delete this message">Delete</button>
+      listEl.innerHTML = `
+        <div class="card" id="latest-card">
+          <div>
+            <div class="meta row"><strong>time:</strong> ${escapeHtml(latest.timestamp || '')}</div>
+            <div class="meta row"><strong>to:</strong> <span class="to-number" style="color:${toColor}">${escapeHtml(toVal)}</span></div>
+            <div class="text"><strong>text:</strong> ${escapeHtml(latest.message || '')}</div>
+          </div>
+          <div>
+            <button class="btn-del" id="btnDel" title="Delete this message">Delete</button>
+          </div>
         </div>
       `;
-      wrap.querySelector('.btn-del').addEventListener('click', async (e) => {
-        const id = e.currentTarget.getAttribute('data-id');
-        try { await fetch(`/api/messages/${id}`, { method: 'DELETE' }); }
-        catch (err) { console.error(err); }
-      });
-      return wrap;
-    }
 
-    // নতুন কার্ড সবসময় তালিকার শুরুর দিকে বসানো হবে (top)
-    function addTop(rec) {
-      state.set(rec.id, rec);
-      const el = cardTpl(rec);
-      if (listEl.firstChild) listEl.insertBefore(el, listEl.firstChild);
-      else listEl.appendChild(el);
-      setEmpty();
-    }
-
-    function removeCard(id) {
-      state.delete(id);
-      const el = document.getElementById(`msg-${id}`);
-      if (el) el.remove();
-      setEmpty();
-    }
-
-    // Initial load: সার্ভার যদি পুরোনো→নতুন অর্ডারে দেয়, আমরা reverse করে নতুনটাকে উপরে দেখাবো
-    async function bootFetch() {
-      try {
-        const arr = await (await fetch('/api/messages')).json();
-        listEl.innerHTML = '';
-        state.clear();
-        // reverse করে addTop, ফলে লেটেস্ট একেবারে উপরে
-        for (const rec of arr.slice().reverse()) addTop(rec);
-      } catch (e) { console.warn('init fetch failed', e); }
-    }
-
-    // Live SSE
-    function bootSSE() {
-      const es = new EventSource('/events');
-      es.onmessage = (ev) => {
+      document.getElementById('btnDel').addEventListener('click', async () => {
         try {
-          const payload = JSON.parse(ev.data);
-          if (payload.type === 'init') {
-            listEl.innerHTML = '';
-            state.clear();
-            // init ব্যাচ আসলে reverse করে উপরে-থেকে-নীচে লেটেস্ট→ওল্ডেস্ট
-            for (const rec of payload.data.slice().reverse()) addTop(rec);
-          } else if (payload.type === 'new') {
-            addTop(payload.data); // নতুন এলেই একেবারে উপরে
-          } else if (payload.type === 'delete') {
-            removeCard(payload.id);
-          }
-        } catch {}
-      };
-      es.onerror = () => console.warn('SSE disconnected…');
+          // DELETE ব্লক হলে POST fallback ব্যবহার করবেন
+          await fetch('/sms', { method: 'DELETE' });
+        } catch (err) {
+          console.error(err);
+          try { await fetch('/sms/delete', { method: 'POST' }); } catch(e) {}
+        }
+      });
+
+      setEmpty(true);
     }
 
-    bootFetch();
-    bootSSE();
+    function clearUI(reason) {
+      listEl.innerHTML = '';
+      setEmpty(false);
+      console.log('Cleared:', reason);
+    }
+
+    // Connect Socket.IO
+    const socket = io();
+
+    socket.on('connect', () => {
+      console.log('Socket connected:', socket.id);
+    });
+
+    socket.on('newMessage', (latest) => {
+      renderLatest(latest);
+    });
+
+    socket.on('messageDeleted', (info) => {
+      clearUI(info?.reason || 'deleted');
+    });
   </script>
 </body>
 </html>
