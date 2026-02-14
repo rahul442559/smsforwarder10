@@ -11,7 +11,7 @@ app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 
 // ===== ৩ মিনিট TTL সহ "সর্বশেষ SMS" স্টোরেজ =====
-let latest = null;           // { message, timestamp, to, expiresAt }
+let latest = null;           // { message, timestamp, expiresAt }
 let autoClearTimer = null;   // setTimeout হ্যান্ডেল
 
 // SMS রিসিভ (JSON বা x-www-form-urlencoded—দুইভাবেই কাজ করবে)
@@ -19,18 +19,15 @@ app.post('/sms', (req, res) => {
   const message = req.body.key || 'No message received';
   const timestamp = req.body.time || new Date().toISOString();
 
-  // ✅ to/from/operator যা পাঠাবেন সেটা এখানে নেবে
-  const to = req.body.to || req.body.from || req.body.operator || '';
-
   // আগের অটো-ক্লিয়ার থাকলে বন্ধ করুন
   if (autoClearTimer) clearTimeout(autoClearTimer);
 
   // এখন থেকে ৩ মিনিটের TTL
   const ttlMs = 3 * 60 * 1000;
   const expiresAt = Date.now() + ttlMs;
-  latest = { message, timestamp, to, expiresAt };
+  latest = { message, timestamp, expiresAt };
 
-  console.log('Processed SMS:', { message, timestamp, to, expiresAt: new Date(expiresAt).toISOString() });
+  console.log('Processed SMS:', { message, timestamp, expiresAt: new Date(expiresAt).toISOString() });
 
   // সকল কানেক্টেড ক্লায়েন্টকে পাঠান
   io.emit('newMessage', latest);
