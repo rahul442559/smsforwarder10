@@ -9,8 +9,7 @@
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background:#0f1115; color:#e6e7ea; }
     header { padding:16px 20px; font-size:22px; font-weight:700; background:#12141a; border-bottom:1px solid #22252e; }
     main { max-width: 900px; margin: 0 auto; padding: 16px; }
-    .list { display: flex; flex-direction: column; gap: 12px; }
-    .card { background:#141823; border:1px solid #232835; border-radius:14px; padding:14px 16px; display:grid; grid-template-columns: 1fr auto; gap:10px; }
+    .card { background:#141823; border:1px solid #232835; border-radius:14px; padding:14px 16px; margin:12px 0; display:grid; grid-template-columns: 1fr auto; gap:10px; }
     .meta { font-size:13px; opacity:.85; }
     .row { margin:2px 0; }
     .text { grid-column: 1 / -1; white-space: pre-wrap; word-break: break-word; font-size:15px; }
@@ -19,7 +18,7 @@
     .empty { opacity:.7; text-align:center; padding:40px 0; }
     a { color:#bcd3ff; text-decoration:none; }
 
-    /* মোবাইল নম্বর হাইলাইট - র‍্যান্ডম কালার JS-এ দেওয়া হবে */
+    /* মোবাইল নম্বর হাইলাইট (রঙ JS থেকে র‍্যান্ডম সেট হবে) */
     .to-number { font-weight:700; }
   </style>
 </head>
@@ -36,57 +35,56 @@
 
     const state = new Map(); // id -> record
 
-    // র‍্যান্ডম কালার জেনারেটর
-    function getRandomColor(str) {
-      let hash = 0;
-      for (let i = 0; i < str.length; i++) {
-        hash = str.charCodeAt(i) + ((hash << 5) - hash);
-      }
-      
-      // ব্রাইট কালার জেনারেট করি (HSL ব্যবহার করে)
-      const h = Math.abs(hash % 360);
-      const s = 70 + (Math.abs(hash >> 8) % 20); // 70-90%
-      const l = 55 + (Math.abs(hash >> 16) % 20); // 55-75%
-      
-      return `hsl(${h}, ${s}%, ${l}%)`;
-    }
-
     function setEmpty() {
       emptyEl.style.display = state.size ? 'none' : 'block';
+    }
+
+    // deterministic-ish random color per to/id (stable across reload)
+    function randomToColor(seed) {
+      const h = hashCode(String(seed));
+      const hue = ((h % 360) + 360) % 360;
+      const sat = 75;
+      const lit = 60;
+      return `hsl(${hue} ${sat}% ${lit}%)`;
+    }
+
+    function hashCode(str) {
+      let hash = 0;
+      for (let i = 0; i < str.length; i++) {
+        hash = ((hash << 5) - hash) + str.charCodeAt(i);
+        hash |= 0; // 32-bit
+      }
+      return hash;
     }
 
     function cardTpl(rec) {
       const wrap = document.createElement('div');
       wrap.className = 'card';
       wrap.id = `msg-${rec.id}`;
-      
-      // to ফিল্ডের জন্য র‍্যান্ডম কালার
-      const toColor = getRandomColor(rec.to || 'unknown');
-      
       wrap.innerHTML = `
         <div>
-          <div class="meta row"><strong>time:</strong> ${escapeHtml(rec.time || rec.receivedAt || '')}</div>
-          <div class="meta row"><strong>to:</strong> <span class="to-number" style="color: ${toColor}">${escapeHtml(rec.to || 'Unknown')}</span></div>
-          <div class="text"><strong>text:</strong> ${escapeHtml(rec.message || rec.text || '')}</div>
+          <div class="meta row"><strong>time:</strong> ${escapeHtml(rec.parts.time || '')}</div>
+          <div class="meta row"><strong>to:</strong> <span class="to-number">${escapeHtml(rec.parts.to || '')}</span></div>
+          <div class="text"><strong>text:</strong> ${escapeHtml(rec.parts.text || '')}</div>
         </div>
         <div>
           <button class="btn-del" data-id="${rec.id}" title="Delete this message">Delete</button>
         </div>
       `;
-      
+
+      // to: টেক্সটের জন্য র‌্যান্ডম কালার (প্রতি কার্ড আলাদা হতে পারে)
+      const toEl = wrap.querySelector('.to-number');
+      if (toEl) toEl.style.color = randomToColor(rec.parts.to || rec.id);
+
       wrap.querySelector('.btn-del').addEventListener('click', async (e) => {
         const id = e.currentTarget.getAttribute('data-id');
-        try { 
-          await fetch(`/api/messages/${id}`, { method: 'DELETE' }); 
-        } catch (err) { 
-          console.error(err); 
-        }
+        try { await fetch(`/api/messages/${id}`, { method: 'DELETE' }); }
+        catch (err) { console.error(err); }
       });
-      
       return wrap;
     }
 
-    // নতুন কার্ড সবসময় তালিকার শুরুর দিকে বসানো হবে
+    // নতুন কার্ড সবসময় তালিকার শুরুর দিকে বসানো হবে (top)
     function addTop(rec) {
       state.set(rec.id, rec);
       const el = cardTpl(rec);
@@ -104,79 +102,43 @@
 
     // Escape helper
     function escapeHtml(s) {
-      if (s === undefined || s === null) return '';
       return String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
     }
 
-    // Live SSE
-    function bootSSE() {
-      const es = new EventSource('/events');
-      
-      es.addEventListener('init', (ev) => {
-        try {
-          const data = JSON.parse(ev.data);
-          listEl.innerHTML = '';
-          state.clear();
-          // reverse করে addTop, ফলে লেটেস্ট একেবারে উপরে
-          for (const rec of data.slice().reverse()) addTop(rec);
-        } catch (e) { console.warn('init parse failed', e); }
-      });
-
-      es.addEventListener('new', (ev) => {
-        try {
-          const rec = JSON.parse(ev.data);
-          addTop(rec);
-        } catch (e) { console.warn('new parse failed', e); }
-      });
-
-      es.addEventListener('delete', (ev) => {
-        try {
-          const data = JSON.parse(ev.data);
-          removeCard(data.id);
-        } catch (e) { console.warn('delete parse failed', e); }
-      });
-
-      es.onerror = () => console.warn('SSE disconnected…');
-    }
-
-    // Fallback REST API for initial load
+    // Initial load: সার্ভার যদি পুরোনো→নতুন অর্ডারে দেয়, আমরা reverse করে নতুনটাকে উপরে দেখাবো
     async function bootFetch() {
       try {
         const arr = await (await fetch('/api/messages')).json();
         listEl.innerHTML = '';
         state.clear();
+        // reverse করে addTop, ফলে লেটেস্ট একেবারে উপরে
         for (const rec of arr.slice().reverse()) addTop(rec);
       } catch (e) { console.warn('init fetch failed', e); }
     }
 
-    // Socket.IO (SSE না থাকলে)
-    function bootSocketIO() {
-      const socket = io();
-      
-      socket.on('init', (msgs) => {
-        listEl.innerHTML = '';
-        state.clear();
-        for (const rec of msgs.slice().reverse()) addTop(rec);
-      });
-      
-      socket.on('new', (rec) => addTop(rec));
-      
-      socket.on('delete', (data) => removeCard(data.id));
+    // Live SSE
+    function bootSSE() {
+      const es = new EventSource('/events');
+      es.onmessage = (ev) => {
+        try {
+          const payload = JSON.parse(ev.data);
+          if (payload.type === 'init') {
+            listEl.innerHTML = '';
+            state.clear();
+            // init ব্যাচ আসলে reverse করে উপরে-থেকে-নীচে লেটেস্ট→ওল্ডেস্ট
+            for (const rec of payload.data.slice().reverse()) addTop(rec);
+          } else if (payload.type === 'new') {
+            addTop(payload.data); // নতুন এলেই একেবারে উপরে
+          } else if (payload.type === 'delete') {
+            removeCard(payload.id);
+          }
+        } catch {}
+      };
+      es.onerror = () => console.warn('SSE disconnected…');
     }
 
-    // Try SSE first, fallback to Socket.IO
-    if (typeof EventSource !== 'undefined') {
-      bootSSE();
-    } else {
-      // Load Socket.IO script if needed
-      const script = document.createElement('script');
-      script.src = '/socket.io/socket.io.js';
-      script.onload = bootSocketIO;
-      document.head.appendChild(script);
-    }
-    
-    // Also fetch initial data via REST as backup
     bootFetch();
+    bootSSE();
   </script>
 </body>
 </html>
