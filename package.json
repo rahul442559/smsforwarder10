@@ -1,13 +1,16 @@
 {
-  "name": "sms-forwarder",
+  "name": "sms-forward-receiver",
   "version": "1.0.0",
+  "description": "Receiver for Android SMS forwarder (form-urlencoded 'message=...')",
   "main": "server.js",
-  "dependencies": {
-    "express": "^4.17.1",
-    "body-parser": "^1.19.0",
-    "socket.io": "^4.8.1"
-  },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "NODE_ENV=development node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
   }
 }
